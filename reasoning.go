@@ -9,7 +9,7 @@ import (
 
 const retryRequiredReasoningTokens = 516
 
-const retryRequiredReasoning516Message = "stream disconnected before completion: [RETRY_REQUIRED_REASONING_516] reasoning_tokens=516; discard this response and resend the request."
+const retryRequiredReasoning516Message = "[RETRY_REQUIRED_REASONING_516] reasoning_tokens=516; 降智请求自动重试中."
 
 func retryRequiredForReasoningTokens(payload []byte) bool {
 	for _, raw := range responseJSONPayloads(payload) {

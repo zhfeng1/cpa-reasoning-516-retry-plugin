@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -35,7 +36,13 @@ func TestInterceptStreamChunkDropsReasoning516CompletedChunk(t *testing.T) {
 	if errDecode := json.Unmarshal(env.Result, &resp); errDecode != nil {
 		t.Fatalf("decode response: %v", errDecode)
 	}
-	if !resp.DropChunk {
-		t.Fatal("DropChunk = false, want true")
+	if resp.DropChunk {
+		t.Fatal("DropChunk = true, want false")
+	}
+	if !bytes.Contains(resp.Body, []byte("event: response.failed")) {
+		t.Fatalf("response body missing response.failed event: %s", resp.Body)
+	}
+	if !bytes.Contains(resp.Body, []byte(retryRequiredReasoning516Message)) {
+		t.Fatalf("response body missing retry message: %s", resp.Body)
 	}
 }

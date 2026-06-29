@@ -6,7 +6,7 @@
       "name": "Reasoning 516 Retry",
       "description": "Asks Codex to discard and retry a response when reasoning_tokens is exactly 516.",
       "author": "zhfeng1",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "repository": "https://github.com/zhfeng1/cpa-reasoning-516-retry-plugin",
       "homepage": "https://github.com/zhfeng1/cpa-reasoning-516-retry-plugin",
       "license": "MIT",

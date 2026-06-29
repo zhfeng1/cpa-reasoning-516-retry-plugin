@@ -5,7 +5,7 @@ CPA native plugin that makes Codex retry a request when the upstream response re
 When detected, the plugin discards the upstream response and returns:
 
 ```text
-stream disconnected before completion: [RETRY_REQUIRED_REASONING_516] reasoning_tokens=516; discard this response and resend the request.
+[RETRY_REQUIRED_REASONING_516] reasoning_tokens=516; 降智请求自动重试中.
 ```
 
 The plugin delegates model execution back to CPA through the host model callback. It does not call providers directly and does not change the requested model.
