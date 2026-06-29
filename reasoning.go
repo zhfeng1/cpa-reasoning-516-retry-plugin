@@ -12,6 +12,9 @@ const retryRequiredReasoningTokens = 516
 const retryRequiredReasoning516Message = "[RETRY_REQUIRED_REASONING_516] reasoning_tokens=516; 降智请求自动重试中."
 
 func retryRequiredForReasoningTokens(payload []byte) bool {
+	if !bytes.Contains(payload, []byte("reasoning_tokens")) {
+		return false
+	}
 	for _, raw := range responseJSONPayloads(payload) {
 		if reasoningTokensFromJSON(raw) == retryRequiredReasoningTokens {
 			return true
