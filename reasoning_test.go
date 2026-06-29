@@ -16,6 +16,13 @@ func TestRetryRequiredForReasoningTokensChatCompletionsPayload(t *testing.T) {
 	}
 }
 
+func TestRetryRequiredForReasoningTokensResponsesCompletedTopLevelUsage(t *testing.T) {
+	payload := []byte(`{"type":"response.completed","response":{"id":"resp_1"},"usage":{"output_tokens_details":{"reasoning_tokens":516}}}`)
+	if !retryRequiredForReasoningTokens(payload) {
+		t.Fatal("retryRequiredForReasoningTokens(top-level response usage) = false, want true")
+	}
+}
+
 func TestRetryRequiredForReasoningTokensStreamingPayload(t *testing.T) {
 	payload := []byte("event: response.completed\n" +
 		`data: {"type":"response.completed","response":{"usage":{"output_tokens_details":{"reasoning_tokens":516}}}}` + "\n\n")

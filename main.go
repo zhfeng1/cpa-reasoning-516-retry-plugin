@@ -69,7 +69,7 @@ import (
 
 const (
 	pluginIdentifier = "reasoning-516-retry"
-	pluginVersion    = "0.1.2"
+	pluginVersion    = "0.1.3"
 )
 
 var currentConfig atomic.Value
@@ -85,11 +85,13 @@ type registration struct {
 }
 
 type registrationCapability struct {
-	ModelRouter           bool                         `json:"model_router"`
-	Executor              bool                         `json:"executor"`
-	ExecutorModelScope    pluginapi.ExecutorModelScope `json:"executor_model_scope"`
-	ExecutorInputFormats  []string                     `json:"executor_input_formats"`
-	ExecutorOutputFormats []string                     `json:"executor_output_formats"`
+	ModelRouter            bool                         `json:"model_router"`
+	Executor               bool                         `json:"executor"`
+	ResponseInterceptor    bool                         `json:"response_interceptor"`
+	StreamChunkInterceptor bool                         `json:"response_stream_interceptor"`
+	ExecutorModelScope     pluginapi.ExecutorModelScope `json:"executor_model_scope"`
+	ExecutorInputFormats   []string                     `json:"executor_input_formats"`
+	ExecutorOutputFormats  []string                     `json:"executor_output_formats"`
 }
 
 type envelope struct {
@@ -111,6 +113,16 @@ type rpcExecutorRequest struct {
 
 type rpcModelRouteRequest struct {
 	pluginapi.ModelRouteRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+type rpcResponseInterceptRequest struct {
+	pluginapi.ResponseInterceptRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+type rpcStreamChunkInterceptRequest struct {
+	pluginapi.StreamChunkInterceptRequest
 	HostCallbackID string `json:"host_callback_id,omitempty"`
 }
 
@@ -202,6 +214,10 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return executeStream(request)
 	case pluginabi.MethodExecutorCountTokens:
 		return okEnvelope(pluginapi.ExecutorResponse{Payload: []byte(`{"input_tokens":0}`)})
+	case pluginabi.MethodResponseInterceptAfter:
+		return interceptResponse(request)
+	case pluginabi.MethodResponseInterceptStreamChunk:
+		return interceptStreamChunk(request)
 	default:
 		return errorEnvelope("unknown_method", "unknown method: "+method), nil
 	}
@@ -246,11 +262,13 @@ func pluginRegistration() registration {
 			},
 		},
 		Capabilities: registrationCapability{
-			ModelRouter:           true,
-			Executor:              true,
-			ExecutorModelScope:    pluginapi.ExecutorModelScopeStatic,
-			ExecutorInputFormats:  formats,
-			ExecutorOutputFormats: formats,
+			ModelRouter:            true,
+			Executor:               true,
+			ResponseInterceptor:    true,
+			StreamChunkInterceptor: true,
+			ExecutorModelScope:     pluginapi.ExecutorModelScopeStatic,
+			ExecutorInputFormats:   formats,
+			ExecutorOutputFormats:  formats,
 		},
 	}
 }
