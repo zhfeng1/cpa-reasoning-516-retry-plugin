@@ -2,34 +2,18 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"strings"
-	"sync"
-	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
-
-const streamStateTTL = 10 * time.Minute
-
-type streamStateEntry struct {
-	pendingCompletedEvent []byte
-	updatedAt             time.Time
-}
-
-var streamState = struct {
-	sync.Mutex
-	entries map[string]streamStateEntry
-}{
-	entries: make(map[string]streamStateEntry),
-}
 
 func interceptResponse(raw []byte) ([]byte, error) {
 	var req rpcResponseInterceptRequest
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
+	}
+	if !shouldIntercept(req.SourceFormat, req.RequestedModel, req.Model) {
+		return okEnvelope(pluginapi.ResponseInterceptResponse{Body: req.Body})
 	}
 	if retryRequiredForReasoningTokens(req.Body) {
 		hostLog(req.HostCallbackID, "warn", "reasoning-516-retry response interceptor detected reasoning_tokens=516", map[string]any{
@@ -48,22 +32,13 @@ func interceptStreamChunk(raw []byte) ([]byte, error) {
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
-	if streamHistoryHasRetryFailure(req.HistoryChunks) {
-		return okEnvelope(pluginapi.StreamChunkInterceptResponse{DropChunk: true})
+	if !shouldIntercept(req.SourceFormat, req.RequestedModel, req.Model) {
+		return okEnvelope(pluginapi.StreamChunkInterceptResponse{Body: req.Body})
 	}
-	streamKey := streamStateKey(req)
-	if isCompletedEventOnlyChunk(req.Body) {
-		storePendingCompletedEvent(streamKey, req.Body)
+	if isRetryFollowupError(req.Body) && streamHistoryHasRetryFailure(req.HistoryChunks) {
 		return okEnvelope(pluginapi.StreamChunkInterceptResponse{DropChunk: true})
 	}
 	body := req.Body
-	if pending := takePendingCompletedEvent(streamKey); len(pending) > 0 {
-		body = joinStreamChunks(pending, req.Body)
-		if !streamFrameReady(body) {
-			storePendingCompletedEvent(streamKey, body)
-			return okEnvelope(pluginapi.StreamChunkInterceptResponse{DropChunk: true})
-		}
-	}
 	if retryRequiredForReasoningTokens(body) {
 		hostLog(req.HostCallbackID, "warn", "reasoning-516-retry stream interceptor detected reasoning_tokens=516", map[string]any{
 			"model":           req.Model,
@@ -158,35 +133,11 @@ func stringAtPath(value any, path []string) string {
 	return ""
 }
 
-func isCompletedEventOnlyChunk(payload []byte) bool {
-	event := ""
-	hasData := false
-	for _, line := range bytes.Split(payload, []byte{'\n'}) {
-		line = bytes.TrimSpace(bytes.TrimRight(line, "\r"))
-		if len(line) == 0 {
-			continue
-		}
-		if bytes.HasPrefix(line, []byte("event:")) {
-			event = strings.TrimSpace(string(bytes.TrimPrefix(line, []byte("event:"))))
-			continue
-		}
-		if bytes.HasPrefix(line, []byte("data:")) {
-			hasData = true
-		}
-	}
-	return event == "response.completed" && !hasData
-}
-
-func streamFrameReady(payload []byte) bool {
-	if !bytes.Contains(payload, []byte("data:")) {
-		return false
-	}
-	for _, raw := range responseJSONPayloads(payload) {
-		if json.Valid(raw) {
-			return true
-		}
-	}
-	return false
+func isRetryFollowupError(payload []byte) bool {
+	return bytes.Contains(payload, []byte("response.failed")) ||
+		bytes.Contains(payload, []byte("upstream_error")) ||
+		bytes.Contains(payload, []byte("Upstream request failed")) ||
+		bytes.Contains(payload, []byte(`"type":"error"`))
 }
 
 func streamHistoryHasRetryFailure(history [][]byte) bool {
@@ -198,86 +149,6 @@ func streamHistoryHasRetryFailure(history [][]byte) bool {
 	return false
 }
 
-func storePendingCompletedEvent(key string, payload []byte) {
-	if key == "" {
-		return
-	}
-	now := time.Now()
-	streamState.Lock()
-	defer streamState.Unlock()
-	cleanupStreamStateLocked(now)
-	streamState.entries[key] = streamStateEntry{
-		pendingCompletedEvent: append([]byte(nil), payload...),
-		updatedAt:             now,
-	}
-}
-
-func takePendingCompletedEvent(key string) []byte {
-	if key == "" {
-		return nil
-	}
-	now := time.Now()
-	streamState.Lock()
-	defer streamState.Unlock()
-	cleanupStreamStateLocked(now)
-	entry, ok := streamState.entries[key]
-	if !ok {
-		return nil
-	}
-	delete(streamState.entries, key)
-	return append([]byte(nil), entry.pendingCompletedEvent...)
-}
-
-func cleanupStreamStateLocked(now time.Time) {
-	for key, entry := range streamState.entries {
-		if now.Sub(entry.updatedAt) > streamStateTTL {
-			delete(streamState.entries, key)
-		}
-	}
-}
-
-func streamStateKey(req rpcStreamChunkInterceptRequest) string {
-	payload := req.OriginalRequest
-	if len(payload) == 0 {
-		payload = req.RequestBody
-	}
-	sum := sha256.Sum256(payload)
-	return strings.Join([]string{
-		req.SourceFormat,
-		req.Model,
-		req.RequestedModel,
-		hex.EncodeToString(sum[:16]),
-	}, "|")
-}
-
-func joinStreamChunks(left, right []byte) []byte {
-	if len(left) == 0 {
-		return append([]byte(nil), right...)
-	}
-	if len(right) == 0 {
-		return append([]byte(nil), left...)
-	}
-	out := make([]byte, 0, len(left)+len(right)+1)
-	out = append(out, left...)
-	if streamChunksNeedLineBreak(out, right) {
-		out = append(out, '\n')
-	}
-	out = append(out, right...)
-	return out
-}
-
-func streamChunksNeedLineBreak(left, right []byte) bool {
-	if len(left) == 0 || len(right) == 0 {
-		return false
-	}
-	if bytes.HasSuffix(left, []byte("\n")) || bytes.HasSuffix(left, []byte("\r")) || right[0] == '\n' || right[0] == '\r' {
-		return false
-	}
-	trimmed := bytes.TrimLeft(right, " \t")
-	for _, prefix := range [][]byte{[]byte("data:"), []byte("event:"), []byte("id:"), []byte("retry:"), []byte(":")} {
-		if bytes.HasPrefix(trimmed, prefix) {
-			return true
-		}
-	}
-	return false
+func shouldIntercept(sourceFormat, requestedModel, model string) bool {
+	return shouldHandle(loadedConfig(), sourceFormat, firstNonEmpty(requestedModel, model))
 }

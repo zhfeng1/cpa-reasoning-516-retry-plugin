@@ -58,7 +58,6 @@ import "C"
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync/atomic"
 	"unsafe"
@@ -69,7 +68,7 @@ import (
 
 const (
 	pluginIdentifier = "reasoning-516-retry"
-	pluginVersion    = "0.1.6"
+	pluginVersion    = "0.1.7"
 )
 
 var currentConfig atomic.Value
@@ -85,13 +84,10 @@ type registration struct {
 }
 
 type registrationCapability struct {
-	ModelRouter            bool                         `json:"model_router"`
-	Executor               bool                         `json:"executor"`
-	ResponseInterceptor    bool                         `json:"response_interceptor"`
-	StreamChunkInterceptor bool                         `json:"response_stream_interceptor"`
-	ExecutorModelScope     pluginapi.ExecutorModelScope `json:"executor_model_scope"`
-	ExecutorInputFormats   []string                     `json:"executor_input_formats"`
-	ExecutorOutputFormats  []string                     `json:"executor_output_formats"`
+	ModelRouter            bool `json:"model_router"`
+	Executor               bool `json:"executor"`
+	ResponseInterceptor    bool `json:"response_interceptor"`
+	StreamChunkInterceptor bool `json:"response_stream_interceptor"`
 }
 
 type envelope struct {
@@ -103,12 +99,6 @@ type envelope struct {
 type envelopeError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
-}
-
-type rpcExecutorRequest struct {
-	pluginapi.ExecutorRequest
-	StreamID       string `json:"stream_id,omitempty"`
-	HostCallbackID string `json:"host_callback_id,omitempty"`
 }
 
 type rpcModelRouteRequest struct {
@@ -124,22 +114,6 @@ type rpcResponseInterceptRequest struct {
 type rpcStreamChunkInterceptRequest struct {
 	pluginapi.StreamChunkInterceptRequest
 	HostCallbackID string `json:"host_callback_id,omitempty"`
-}
-
-type hostModelExecutionRequest struct {
-	pluginapi.HostModelExecutionRequest
-	HostCallbackID string `json:"host_callback_id,omitempty"`
-}
-
-type rpcStreamEmitRequest struct {
-	StreamID string `json:"stream_id"`
-	Payload  []byte `json:"payload,omitempty"`
-	Error    string `json:"error,omitempty"`
-}
-
-type rpcStreamCloseRequest struct {
-	StreamID string `json:"stream_id"`
-	Error    string `json:"error,omitempty"`
 }
 
 type rpcHostLogRequest struct {
@@ -206,14 +180,6 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return okEnvelope(pluginRegistration())
 	case pluginabi.MethodModelRoute:
 		return routeModel(request)
-	case pluginabi.MethodExecutorIdentifier:
-		return okEnvelope(map[string]string{"identifier": pluginIdentifier})
-	case pluginabi.MethodExecutorExecute:
-		return execute(request)
-	case pluginabi.MethodExecutorExecuteStream:
-		return executeStream(request)
-	case pluginabi.MethodExecutorCountTokens:
-		return okEnvelope(pluginapi.ExecutorResponse{Payload: []byte(`{"input_tokens":0}`)})
 	case pluginabi.MethodResponseInterceptAfter:
 		return interceptResponse(request)
 	case pluginabi.MethodResponseInterceptStreamChunk:
@@ -247,7 +213,6 @@ func loadedConfig() pluginConfig {
 }
 
 func pluginRegistration() registration {
-	formats := []string{"codex", "openai-response", "openai", "chat-completions", "claude", "gemini", "antigravity"}
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
@@ -256,19 +221,16 @@ func pluginRegistration() registration {
 			Author:           "zhfeng1",
 			GitHubRepository: "https://github.com/zhfeng1/cpa-reasoning-516-retry-plugin",
 			ConfigFields: []pluginapi.ConfigField{
-				{Name: "enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "When false, the router declines every request."},
+				{Name: "enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "When false, response interceptors pass every response through unchanged."},
 				{Name: "source_formats", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional inbound protocol allowlist."},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model patterns with * wildcard."},
 			},
 		},
 		Capabilities: registrationCapability{
-			ModelRouter:            true,
-			Executor:               true,
+			ModelRouter:            false,
+			Executor:               false,
 			ResponseInterceptor:    true,
 			StreamChunkInterceptor: true,
-			ExecutorModelScope:     pluginapi.ExecutorModelScopeStatic,
-			ExecutorInputFormats:   formats,
-			ExecutorOutputFormats:  formats,
 		},
 	}
 }
@@ -278,23 +240,11 @@ func routeModel(raw []byte) ([]byte, error) {
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
-	if !shouldHandle(loadedConfig(), req.SourceFormat, req.RequestedModel) {
-		hostLog(req.HostCallbackID, "debug", "reasoning-516-retry route skipped", map[string]any{
-			"source_format": req.SourceFormat,
-			"model":         req.RequestedModel,
-		})
-		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
-	}
-	hostLog(req.HostCallbackID, "info", "reasoning-516-retry route matched", map[string]any{
+	hostLog(req.HostCallbackID, "debug", "reasoning-516-retry route skipped: interceptors only", map[string]any{
 		"source_format": req.SourceFormat,
 		"model":         req.RequestedModel,
 	})
-	return okEnvelope(pluginapi.ModelRouteResponse{
-		Handled:    true,
-		TargetKind: pluginapi.ModelRouteTargetExecutor,
-		Target:     pluginIdentifier,
-		Reason:     pluginIdentifier + ":matched",
-	})
+	return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
 }
 
 func callHost(method string, payload any) (json.RawMessage, error) {
@@ -367,24 +317,6 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	response.len = C.size_t(len(raw))
 }
 
-func hostProtocol(exec pluginapi.ExecutorRequest) string {
-	protocol := firstNonEmpty(exec.SourceFormat, exec.Format)
-	if protocol == "" {
-		return "openai"
-	}
-	return protocol
-}
-
-func requestBody(exec pluginapi.ExecutorRequest) []byte {
-	if len(exec.OriginalRequest) > 0 {
-		return append([]byte(nil), exec.OriginalRequest...)
-	}
-	if len(exec.Payload) > 0 {
-		return append([]byte(nil), exec.Payload...)
-	}
-	return nil
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -392,17 +324,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func cloneHeader(headers http.Header) http.Header {
-	if headers == nil {
-		return nil
-	}
-	cloned := make(http.Header, len(headers))
-	for key, values := range headers {
-		cloned[key] = append([]string(nil), values...)
-	}
-	return cloned
 }
 
 func hostLog(hostCallbackID, level, message string, fields map[string]any) {

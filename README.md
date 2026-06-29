@@ -8,7 +8,7 @@ When detected, the plugin discards the upstream response and returns:
 [RETRY_REQUIRED_REASONING_516] reasoning_tokens=516; 降智请求自动重试中.
 ```
 
-The plugin delegates model execution back to CPA through the host model callback. It does not call providers directly and does not change the requested model.
+The plugin uses CPA response interceptors only. It does not route models, buffer the model stream, call providers directly, or change the requested model.
 
 ## Configuration
 
@@ -31,7 +31,7 @@ plugins:
 
 Fields:
 
-- `enabled`: enables or disables the router.
+- `enabled`: enables or disables the response interceptors.
 - `source_formats`: optional inbound protocol allowlist. Empty means all formats.
 - `models`: optional model patterns with `*` wildcard. Empty means all models.
 
