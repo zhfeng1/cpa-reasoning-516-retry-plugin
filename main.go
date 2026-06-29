@@ -69,7 +69,7 @@ import (
 
 const (
 	pluginIdentifier = "reasoning-516-retry"
-	pluginVersion    = "0.1.5"
+	pluginVersion    = "0.1.6"
 )
 
 var currentConfig atomic.Value
