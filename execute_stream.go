@@ -19,9 +19,20 @@ func executeStream(raw []byte) ([]byte, error) {
 	if streamID == "" {
 		return errorEnvelope("executor_error", "stream_id is required for executor.execute_stream"), nil
 	}
+	hostLog(req.HostCallbackID, "info", "reasoning-516-retry stream execute", map[string]any{
+		"source_format": req.SourceFormat,
+		"format":        req.Format,
+		"model":         req.Model,
+		"stream_id":     streamID,
+	})
 	go func() {
 		errRun := forwardHostModelStream(req.ExecutorRequest, req.HostCallbackID, streamID)
 		if errRun != nil {
+			hostLog(req.HostCallbackID, "warn", "reasoning-516-retry stream failed", map[string]any{
+				"model":     req.Model,
+				"stream_id": streamID,
+				"error":     errRun.Error(),
+			})
 			closePluginStream(streamID, errRun.Error())
 			return
 		}
@@ -46,6 +57,7 @@ func forwardHostModelStream(exec pluginapi.ExecutorRequest, hostCallbackID, plug
 	}
 	defer func() { _ = closeHostModelStream(resp.StreamID) }()
 
+	bufferedChunks := make([][]byte, 0, 128)
 	for {
 		chunk, errRead := readHostModelStream(resp.StreamID)
 		if errRead != nil {
@@ -56,13 +68,21 @@ func forwardHostModelStream(exec pluginapi.ExecutorRequest, hostCallbackID, plug
 		}
 		if len(chunk.Payload) > 0 {
 			if retryRequiredForReasoningTokens(chunk.Payload) {
+				hostLog(hostCallbackID, "warn", "reasoning-516-retry detected reasoning_tokens=516", map[string]any{
+					"model":           exec.Model,
+					"stream":          true,
+					"buffered_chunks": len(bufferedChunks),
+				})
 				return fmt.Errorf("%s", retryRequiredReasoning516Message)
 			}
-			if errEmit := emitPluginStreamChunk(pluginStreamID, chunk.Payload); errEmit != nil {
-				return errEmit
-			}
+			bufferedChunks = append(bufferedChunks, append([]byte(nil), chunk.Payload...))
 		}
 		if chunk.Done {
+			for _, payload := range bufferedChunks {
+				if errEmit := emitPluginStreamChunk(pluginStreamID, payload); errEmit != nil {
+					return errEmit
+				}
+			}
 			return nil
 		}
 	}

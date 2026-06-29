@@ -15,8 +15,17 @@ func execute(raw []byte) ([]byte, error) {
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
+	hostLog(req.HostCallbackID, "info", "reasoning-516-retry non-stream execute", map[string]any{
+		"source_format": req.SourceFormat,
+		"format":        req.Format,
+		"model":         req.Model,
+	})
 	resp, errExecute := executeHostModel(req.ExecutorRequest, req.HostCallbackID)
 	if errExecute != nil {
+		hostLog(req.HostCallbackID, "warn", "reasoning-516-retry host execute failed", map[string]any{
+			"model": req.Model,
+			"error": errExecute.Error(),
+		})
 		return errorEnvelope("executor_error", errExecute.Error()), nil
 	}
 	status := resp.StatusCode
@@ -27,6 +36,10 @@ func execute(raw []byte) ([]byte, error) {
 		return okEnvelope(pluginapi.ExecutorResponse{Payload: resp.Body, Headers: cloneHeader(resp.Headers)})
 	}
 	if retryRequiredForReasoningTokens(resp.Body) {
+		hostLog(req.HostCallbackID, "warn", "reasoning-516-retry detected reasoning_tokens=516", map[string]any{
+			"model":  req.Model,
+			"stream": false,
+		})
 		return errorEnvelope("retry_required_reasoning_516", retryRequiredReasoning516Message), nil
 	}
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: resp.Body, Headers: cloneHeader(resp.Headers)})

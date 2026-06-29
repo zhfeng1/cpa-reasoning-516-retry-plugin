@@ -24,6 +24,7 @@ plugins:
         - codex
         - openai-response
         - openai
+        - chat-completions
       models:
         - "*"
 ```

@@ -69,7 +69,7 @@ import (
 
 const (
 	pluginIdentifier = "reasoning-516-retry"
-	pluginVersion    = "0.1.0"
+	pluginVersion    = "0.1.2"
 )
 
 var currentConfig atomic.Value
@@ -128,6 +128,13 @@ type rpcStreamEmitRequest struct {
 type rpcStreamCloseRequest struct {
 	StreamID string `json:"stream_id"`
 	Error    string `json:"error,omitempty"`
+}
+
+type rpcHostLogRequest struct {
+	HostCallbackID string         `json:"host_callback_id,omitempty"`
+	Level          string         `json:"level,omitempty"`
+	Message        string         `json:"message,omitempty"`
+	Fields         map[string]any `json:"fields,omitempty"`
 }
 
 func main() {}
@@ -254,8 +261,16 @@ func routeModel(raw []byte) ([]byte, error) {
 		return nil, errUnmarshal
 	}
 	if !shouldHandle(loadedConfig(), req.SourceFormat, req.RequestedModel) {
+		hostLog(req.HostCallbackID, "debug", "reasoning-516-retry route skipped", map[string]any{
+			"source_format": req.SourceFormat,
+			"model":         req.RequestedModel,
+		})
 		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
 	}
+	hostLog(req.HostCallbackID, "info", "reasoning-516-retry route matched", map[string]any{
+		"source_format": req.SourceFormat,
+		"model":         req.RequestedModel,
+	})
 	return okEnvelope(pluginapi.ModelRouteResponse{
 		Handled:    true,
 		TargetKind: pluginapi.ModelRouteTargetExecutor,
@@ -370,4 +385,16 @@ func cloneHeader(headers http.Header) http.Header {
 		cloned[key] = append([]string(nil), values...)
 	}
 	return cloned
+}
+
+func hostLog(hostCallbackID, level, message string, fields map[string]any) {
+	if strings.TrimSpace(message) == "" {
+		return
+	}
+	_, _ = callHost(pluginabi.MethodHostLog, rpcHostLogRequest{
+		HostCallbackID: hostCallbackID,
+		Level:          level,
+		Message:        message,
+		Fields:         fields,
+	})
 }

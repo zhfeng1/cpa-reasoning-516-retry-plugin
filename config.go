@@ -15,8 +15,8 @@ type pluginConfig struct {
 
 func defaultPluginConfig() pluginConfig {
 	return pluginConfig{
-		Enabled:       false,
-		SourceFormats: []string{"codex", "openai-response", "openai"},
+		Enabled:       true,
+		SourceFormats: []string{"codex", "openai-response", "openai", "chat-completions"},
 		Models:        []string{"*"},
 	}
 }
