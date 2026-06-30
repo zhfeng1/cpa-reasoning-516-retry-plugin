@@ -15,6 +15,9 @@ func execute(raw []byte) ([]byte, error) {
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
+	if bypassExecutorRequest(req.ExecutorRequest) {
+		return errorEnvelope("executor_bypass", "reasoning-516-retry wrapper bypass"), nil
+	}
 	hostLog(req.HostCallbackID, "info", "reasoning-516-retry non-stream execute", map[string]any{
 		"source_format": req.SourceFormat,
 		"format":        req.Format,
@@ -53,7 +56,7 @@ func executeHostModel(exec pluginapi.ExecutorRequest, hostCallbackID string) (pl
 			Model:         strings.TrimSpace(exec.Model),
 			Stream:        false,
 			Body:          requestBody(exec),
-			Headers:       cloneHeader(exec.Headers),
+			Headers:       hostModelHeaders(exec),
 			Query:         exec.Query,
 			Alt:           exec.Alt,
 		},

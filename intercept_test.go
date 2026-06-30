@@ -9,6 +9,7 @@ import (
 )
 
 func TestInterceptStreamChunkDropsReasoning516CompletedChunk(t *testing.T) {
+	enableStreamInterceptorFallbackForTest(t)
 	rawReq, errMarshal := json.Marshal(rpcStreamChunkInterceptRequest{
 		StreamChunkInterceptRequest: pluginapi.StreamChunkInterceptRequest{
 			SourceFormat: "openai-response",
@@ -49,6 +50,7 @@ func TestInterceptStreamChunkDropsReasoning516CompletedChunk(t *testing.T) {
 }
 
 func TestInterceptStreamChunkDropsChunksAfterRetryFailure(t *testing.T) {
+	enableStreamInterceptorFallbackForTest(t)
 	req := pluginapi.StreamChunkInterceptRequest{
 		SourceFormat: "openai-response",
 		Model:        "gpt-5.5",
@@ -69,6 +71,7 @@ func TestInterceptStreamChunkDropsChunksAfterRetryFailure(t *testing.T) {
 }
 
 func TestInterceptStreamChunkPassesSplitCompletedEventWithoutBuffering(t *testing.T) {
+	enableStreamInterceptorFallbackForTest(t)
 	resp := decodeStreamInterceptResponse(t, pluginapi.StreamChunkInterceptRequest{
 		SourceFormat: "openai-response",
 		Model:        "gpt-5.5",
@@ -80,6 +83,32 @@ func TestInterceptStreamChunkPassesSplitCompletedEventWithoutBuffering(t *testin
 	if string(resp.Body) != "event: response.completed" {
 		t.Fatalf("body = %q, want completed event passthrough", resp.Body)
 	}
+}
+
+func TestInterceptStreamChunkFallbackDisabledByDefault(t *testing.T) {
+	currentConfig.Store(defaultPluginConfig())
+	resp := decodeStreamInterceptResponse(t, pluginapi.StreamChunkInterceptRequest{
+		SourceFormat: "openai-response",
+		Model:        "gpt-5.5",
+		Body: []byte("event: response.completed\n" +
+			`data: {"type":"response.completed","response":{"usage":{"output_tokens_details":{"reasoning_tokens":516}}}}` + "\n\n"),
+	})
+	if resp.DropChunk {
+		t.Fatal("DropChunk = true, want false")
+	}
+	if bytes.Contains(resp.Body, []byte("RETRY_REQUIRED_REASONING_516")) {
+		t.Fatalf("body contains retry marker with fallback disabled: %s", resp.Body)
+	}
+}
+
+func enableStreamInterceptorFallbackForTest(t *testing.T) {
+	t.Helper()
+	cfg := defaultPluginConfig()
+	cfg.StreamInterceptorFallback = true
+	currentConfig.Store(cfg)
+	t.Cleanup(func() {
+		currentConfig.Store(defaultPluginConfig())
+	})
 }
 
 func decodeStreamInterceptResponse(t *testing.T, req pluginapi.StreamChunkInterceptRequest) pluginapi.StreamChunkInterceptResponse {

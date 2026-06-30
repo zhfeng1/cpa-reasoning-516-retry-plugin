@@ -20,6 +20,9 @@ func executeStream(raw []byte) ([]byte, error) {
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
+	if bypassExecutorRequest(req.ExecutorRequest) {
+		return errorEnvelope("executor_bypass", "reasoning-516-retry wrapper bypass"), nil
+	}
 	streamID := strings.TrimSpace(req.StreamID)
 	if streamID == "" {
 		return errorEnvelope("executor_error", "stream_id is required for executor.execute_stream"), nil
@@ -131,7 +134,7 @@ func startHostModelStream(exec pluginapi.ExecutorRequest, hostCallbackID string)
 			Model:         strings.TrimSpace(exec.Model),
 			Stream:        true,
 			Body:          requestBody(exec),
-			Headers:       cloneHeader(exec.Headers),
+			Headers:       hostModelHeaders(exec),
 			Query:         exec.Query,
 			Alt:           exec.Alt,
 		},

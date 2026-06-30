@@ -32,7 +32,7 @@ func interceptStreamChunk(raw []byte) ([]byte, error) {
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
-	if !shouldIntercept(req.SourceFormat, req.RequestedModel, req.Model) {
+	if !shouldInterceptStreamChunk(req.SourceFormat, req.RequestedModel, req.Model) {
 		return okEnvelope(pluginapi.StreamChunkInterceptResponse{Body: req.Body})
 	}
 	if isRetryFollowupError(req.Body) && streamHistoryHasRetryFailure(req.HistoryChunks) {
@@ -151,4 +151,9 @@ func streamHistoryHasRetryFailure(history [][]byte) bool {
 
 func shouldIntercept(sourceFormat, requestedModel, model string) bool {
 	return shouldHandle(loadedConfig(), sourceFormat, firstNonEmpty(requestedModel, model))
+}
+
+func shouldInterceptStreamChunk(sourceFormat, requestedModel, model string) bool {
+	cfg := loadedConfig()
+	return cfg.StreamInterceptorFallback && shouldHandle(cfg, sourceFormat, firstNonEmpty(requestedModel, model))
 }

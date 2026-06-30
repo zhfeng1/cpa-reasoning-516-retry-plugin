@@ -69,7 +69,7 @@ import (
 
 const (
 	pluginIdentifier = "reasoning-516-retry"
-	pluginVersion    = "0.1.8"
+	pluginVersion    = "0.1.9"
 )
 
 var currentConfig atomic.Value
@@ -85,6 +85,9 @@ type registration struct {
 }
 
 type registrationCapability struct {
+	ModelRegistrar         bool                         `json:"model_registrar"`
+	ModelProvider          bool                         `json:"model_provider"`
+	AuthProvider           bool                         `json:"auth_provider"`
 	ModelRouter            bool                         `json:"model_router"`
 	Executor               bool                         `json:"executor"`
 	ResponseInterceptor    bool                         `json:"response_interceptor"`
@@ -113,6 +116,16 @@ type rpcExecutorRequest struct {
 
 type rpcModelRouteRequest struct {
 	pluginapi.ModelRouteRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+type rpcAuthModelRequest struct {
+	pluginapi.AuthModelRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+type rpcAuthRefreshRequest struct {
+	pluginapi.AuthRefreshRequest
 	HostCallbackID string `json:"host_callback_id,omitempty"`
 }
 
@@ -204,6 +217,22 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 			return nil, errConfigure
 		}
 		return okEnvelope(pluginRegistration())
+	case pluginabi.MethodModelRegister:
+		return registerModels(request)
+	case pluginabi.MethodModelStatic:
+		return staticModels(request)
+	case pluginabi.MethodModelForAuth:
+		return modelsForAuth(request)
+	case pluginabi.MethodAuthIdentifier:
+		return okEnvelope(map[string]string{"identifier": pluginIdentifier})
+	case pluginabi.MethodAuthParse:
+		return parseAuth(request)
+	case pluginabi.MethodAuthLoginStart:
+		return errorEnvelope("not_supported", "reasoning-516-retry auth is created automatically"), nil
+	case pluginabi.MethodAuthLoginPoll:
+		return errorEnvelope("not_supported", "reasoning-516-retry auth is created automatically"), nil
+	case pluginabi.MethodAuthRefresh:
+		return refreshAuth(request)
 	case pluginabi.MethodModelRoute:
 		return routeModel(request)
 	case pluginabi.MethodExecutorIdentifier:
@@ -235,6 +264,9 @@ func configure(raw []byte) error {
 		return errDecode
 	}
 	currentConfig.Store(cfg)
+	if cfg.Enabled && cfg.ProviderWrapper && cfg.EnsureAuth {
+		ensureSyntheticAuth()
+	}
 	return nil
 }
 
@@ -247,6 +279,7 @@ func loadedConfig() pluginConfig {
 }
 
 func pluginRegistration() registration {
+	cfg := loadedConfig()
 	formats := []string{"codex", "openai-response", "openai", "chat-completions", "claude", "gemini", "antigravity"}
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
@@ -259,14 +292,22 @@ func pluginRegistration() registration {
 				{Name: "enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "When false, response interceptors pass every response through unchanged."},
 				{Name: "source_formats", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional inbound protocol allowlist."},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model patterns with * wildcard."},
+				{Name: "provider_wrapper", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Register a lightweight executor provider so streams can finish cleanly after rewriting reasoning_tokens=516."},
+				{Name: "registered_models", Type: pluginapi.ConfigFieldTypeArray, Description: "Concrete model IDs exposed by the wrapper provider."},
+				{Name: "provider_weight", Type: pluginapi.ConfigFieldTypeInteger, Description: "Registration weight used to prefer the wrapper provider for matching model IDs."},
+				{Name: "ensure_auth", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Create a local synthetic auth entry for the wrapper provider."},
+				{Name: "stream_interceptor_fallback", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Legacy fallback; may emit a duplicate terminal error on older CPA versions."},
 			},
 		},
 		Capabilities: registrationCapability{
+			ModelRegistrar:         false,
+			ModelProvider:          cfg.Enabled && cfg.ProviderWrapper,
+			AuthProvider:           cfg.Enabled && cfg.ProviderWrapper,
 			ModelRouter:            true,
 			Executor:               true,
 			ResponseInterceptor:    true,
-			StreamChunkInterceptor: true,
-			ExecutorModelScope:     pluginapi.ExecutorModelScopeStatic,
+			StreamChunkInterceptor: cfg.StreamInterceptorFallback,
+			ExecutorModelScope:     pluginapi.ExecutorModelScopeBoth,
 			ExecutorInputFormats:   formats,
 			ExecutorOutputFormats:  formats,
 		},
